@@ -1,19 +1,15 @@
 ---
-title: "Catatonia-ID Educational Survey Dashboard"
+title: "Catatonia-ID Survey Dashboard"
 format: 
-  dashboard:
+  html:
     theme: cosmo
-    nav-buttons: [github]
-    logo: "logo.png"
-    orientation: columns
-    scrolling: false
-server: shiny
+    toc: false
+    page-layout: full
 ---
 
 ```{r}
 #| label: setup
 #| include: false
-library(shiny)
 library(DT)
 library(plotly)
 library(tidyverse)
@@ -23,7 +19,6 @@ library(knitr)
 library(kableExtra)
 library(reactable)
 library(htmltools)
-library(shinydashboard)
 
 # Load data
 # In production, this would read from the actual Qualtrics CSV
