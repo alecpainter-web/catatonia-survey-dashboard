@@ -31,7 +31,7 @@ jobs:
     
     - name: Install R packages
       run: |
-        install.packages(c("tidyverse", "plotly", "DT", "reactable", "lubridate", "htmltools"))
+        install.packages(c("tidyverse", "plotly", "DT", "reactable", "lubridate", "htmltools", "knitr", "scales"), repos='https://cran.rstudio.com/')
       shell: Rscript {0}
     
     - name: Render dashboard
