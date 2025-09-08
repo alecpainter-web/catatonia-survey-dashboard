@@ -1,0 +1,851 @@
+---
+title: "Catatonia-ID Educational Survey Dashboard"
+format: 
+  dashboard:
+    theme: cosmo
+    nav-buttons: [github]
+    logo: "logo.png"
+    orientation: columns
+    scrolling: false
+server: shiny
+---
+
+```{r}
+#| label: setup
+#| include: false
+library(shiny)
+library(DT)
+library(plotly)
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(knitr)
+library(kableExtra)
+library(reactable)
+library(htmltools)
+library(shinydashboard)
+
+# Load data
+# In production, this would read from the actual Qualtrics CSV
+data_file <- "mock_catatonia_id_survey_data.csv"
+
+if (file.exists(data_file)) {
+  survey_data <- read_csv(data_file, show_col_types = FALSE)
+} else {
+  # Fallback if file doesn't exist
+  survey_data <- tibble(
+    ResponseId = character(0),
+    Progress = numeric(0),
+    Finished = logical(0),
+    RecordedDate = as.POSIXct(character(0)),
+    Q1_Main_Role = character(0)
+  )
+}
+
+# Data processing functions
+process_survey_data <- function(data) {
+  if (nrow(data) == 0) return(list(summary_stats = NULL, completion_by_day = NULL))
+  
+  # Clean and process data
+  data <- data %>%
+    mutate(
+      RecordedDate = as.Date(RecordedDate),
+      Duration_minutes = Duration / 60,
+      Role_Clean = case_when(
+        Q1_Main_Role == "Medical provider (like a psychiatrist or pediatrician)" ~ "Medical Provider",
+        Q1_Main_Role == "Person with intellectual disability" ~ "Person with ID",
+        is.na(Q1_Main_Role) ~ "Unknown",
+        TRUE ~ Q1_Main_Role
+      )
+    )
+  
+  # Summary statistics
+  summary_stats <- list(
+    total_responses = nrow(data),
+    completed = sum(data$Finished, na.rm = TRUE),
+    completion_rate = round(mean(data$Finished, na.rm = TRUE) * 100, 1),
+    avg_completion_time = round(mean(data$Duration_minutes[data$Finished], na.rm = TRUE), 1),
+    responses_today = sum(data$RecordedDate == Sys.Date(), na.rm = TRUE),
+    responses_last_7_days = sum(data$RecordedDate >= Sys.Date() - 6, na.rm = TRUE)
+  )
+  
+  # Completion by day
+  completion_by_day <- data %>%
+    group_by(RecordedDate) %>%
+    summarise(
+      total = n(),
+      completed = sum(Finished, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    arrange(RecordedDate)
+  
+  return(list(
+    summary_stats = summary_stats,
+    completion_by_day = completion_by_day,
+    processed_data = data
+  ))
+}
+
+# Process the data
+processed <- process_survey_data(survey_data)
+```
+
+# Survey Overview
+
+## Column {width=25%}
+
+### Language Preferences
+
+```{r}
+#| label: language-preferences
+#| title: "Preferred Language Style"
+
+if (!is.null(processed$processed_data) && nrow(processed$processed_data) > 0) {
+  language_data <- processed$processed_data %>%
+    filter(!is.na(Q9_Language_Type)) %>%
+    count(Q9_Language_Type) %>%
+    mutate(
+      percentage = round(n / sum(n) * 100, 1),
+      Language_Short = case_when(
+        str_detect(Q9_Language_Type, "Medical") ~ "Medical/Detailed",
+        str_detect(Q9_Language_Type, "Easy") ~ "Simple Language",
+        str_detect(Q9_Language_Type, "Both") ~ "Both Options",
+        TRUE ~ Q9_Language_Type
+      )
+    )
+  
+  p <- plot_ly(language_data, labels = ~Language_Short, values = ~n,
+               type = 'pie',
+               textinfo = 'label+percent',
+               textposition = 'inside',
+               marker = list(colors = c('#3498DB', '#E74C3C', '#F39C12'))) %>%
+    layout(
+      showlegend = TRUE,
+      margin = list(l = 20, r = 20, t = 20, b = 20)
+    )
+  
+  p
+} else {
+  plotly_empty() %>%
+    layout(title = "No language preference data available")
+}
+```
+
+# Problem Areas & Insights
+
+## Column {width=60%}
+
+### Dropout Analysis
+
+```{r}
+#| label: dropout-analysis
+#| title: "Survey Dropout Points"
+
+if (!is.null(processed$processed_data) && nrow(processed$processed_data) > 0) {
+  # Create progress bins for dropout analysis
+  dropout_data <- processed$processed_data %>%
+    mutate(
+      progress_bin = case_when(
+        Progress < 25 ~ "0-25% (Section 1)",
+        Progress < 50 ~ "25-50% (Section 2)",
+        Progress < 75 ~ "50-75% (Section 3)", 
+        Progress < 100 ~ "75-99% (Section 4)",
+        TRUE ~ "100% (Completed)"
+      )
+    ) %>%
+    count(progress_bin) %>%
+    mutate(
+      percentage = round(n / sum(n) * 100, 1),
+      progress_bin = factor(progress_bin, levels = c("0-25% (Section 1)", "25-50% (Section 2)",
+                                                    "50-75% (Section 3)", "75-99% (Section 4)", 
+                                                    "100% (Completed)"))
+    )
+  
+  p <- plot_ly(dropout_data,
+               x = ~progress_bin, y = ~n,
+               type = 'bar',
+               text = ~paste0(n, " (", percentage, "%)"),
+               textposition = 'outside',
+               marker = list(color = c('#E74C3C', '#E67E22', '#F1C40F', '#2ECC71', '#27AE60'))) %>%
+    layout(
+      xaxis = list(title = "Survey Progress"),
+      yaxis = list(title = "Number of Responses"),
+      margin = list(l = 50, r = 20, t = 20, b = 120)
+    ) %>%
+    config(displayModeBar = FALSE)
+  
+  p
+} else {
+  plotly_empty() %>%
+    layout(title = "No dropout data available")
+}
+```
+
+### Key Concerns & Needs
+
+```{r}
+#| label: concerns-needs
+#| title: "What Worries Participants Most"
+
+if (!is.null(processed$processed_data) && nrow(processed$processed_data) > 0) {
+  concerns_data <- processed$processed_data %>%
+    filter(!is.na(Q13_Biggest_Worry) & Q13_Biggest_Worry != "") %>%
+    count(Q13_Biggest_Worry, sort = TRUE) %>%
+    mutate(
+      percentage = round(n / sum(n) * 100, 1),
+      Q13_Biggest_Worry = str_wrap(Q13_Biggest_Worry, 25)
+    ) %>%
+    slice_head(n = 8)  # Top 8 concerns
+  
+  p <- plot_ly(concerns_data,
+               y = ~reorder(Q13_Biggest_Worry, n), x = ~n,
+               type = 'bar', orientation = 'h',
+               text = ~paste0(n, " (", percentage, "%)"),
+               textposition = 'outside',
+               marker = list(color = '#C0392B')) %>%
+    layout(
+      xaxis = list(title = "Number of Responses"),
+      yaxis = list(title = ""),
+      margin = list(l = 150, r = 50, t = 20, b = 50)
+    ) %>%
+    config(displayModeBar = FALSE)
+  
+  p
+} else {
+  plotly_empty() %>%
+    layout(title = "No concern data available")
+}
+```
+
+## Column {width=40%}
+
+### Response Quality Metrics
+
+```{r}
+#| label: quality-metrics
+#| title: "Data Quality Indicators"
+
+if (!is.null(processed$processed_data) && nrow(processed$processed_data) > 0) {
+  quality_metrics <- processed$processed_data %>%
+    summarise(
+      total_responses = n(),
+      complete_responses = sum(Finished, na.rm = TRUE),
+      avg_completion_time = round(mean(Duration_minutes[Finished], na.rm = TRUE), 1),
+      fast_completions = sum(Duration_minutes < 3 & Finished, na.rm = TRUE),
+      slow_completions = sum(Duration_minutes > 30 & Finished, na.rm = TRUE),
+      text_responses = sum(!is.na(Q4_What_Include_Text) & Q4_What_Include_Text != "", na.rm = TRUE),
+      review_interest = sum(Q15_Review_Group_Interest == "Yes", na.rm = TRUE)
+    ) %>%
+    pivot_longer(everything(), names_to = "Metric", values_to = "Value") %>%
+    mutate(
+      Metric_Label = case_when(
+        Metric == "total_responses" ~ "Total Responses",
+        Metric == "complete_responses" ~ "Complete Responses", 
+        Metric == "avg_completion_time" ~ "Avg. Time (min)",
+        Metric == "fast_completions" ~ "Very Fast (<3 min)",
+        Metric == "slow_completions" ~ "Very Slow (>30 min)",
+        Metric == "text_responses" ~ "Text Responses",
+        Metric == "review_interest" ~ "Review Group Interest"
+      ),
+      Color = case_when(
+        Metric %in% c("fast_completions", "slow_completions") ~ "#E74C3C",
+        Metric %in% c("text_responses", "review_interest") ~ "#27AE60",
+        TRUE ~ "#3498DB"
+      )
+    )
+  
+  # Create a simple table display
+  quality_table <- quality_metrics %>%
+    select(Metric_Label, Value) %>%
+    reactable(
+      columns = list(
+        Metric_Label = colDef(name = "Quality Metric", width = 200),
+        Value = colDef(name = "Count/Value", width = 100, align = "center")
+      ),
+      striped = TRUE,
+      highlight = TRUE,
+      borderless = TRUE,
+      compact = TRUE
+    )
+  
+  quality_table
+} else {
+  div(
+    h4("No Quality Data"),
+    p("Upload survey data to view quality metrics.")
+  )
+}
+```
+
+### Missing Data Heatmap
+
+```{r}
+#| label: missing-data
+#| title: "Missing Data by Question"
+
+if (!is.null(processed$processed_data) && nrow(processed$processed_data) > 0) {
+  # Calculate missing percentages for key questions
+  key_questions <- c("Q1_Main_Role", "Q2_Heard_Of_Catatonia", "Q3_Cared_For_Someone",
+                    "Q7_Real_Life_Examples", "Q8_Checklist_Helpful", "Q9_Language_Type",
+                    "Q11_Pictures_Help", "Q15_Review_Group_Interest")
+  
+  missing_data <- processed$processed_data %>%
+    select(all_of(key_questions[key_questions %in% names(processed$processed_data)])) %>%
+    summarise(across(everything(), ~ round(sum(is.na(.)) / length(.) * 100, 1))) %>%
+    pivot_longer(everything(), names_to = "Question", values_to = "Missing_Percent") %>%
+    mutate(
+      Question_Label = case_when(
+        Question == "Q1_Main_Role" ~ "Main Role",
+        Question == "Q2_Heard_Of_Catatonia" ~ "Heard of Catatonia",
+        Question == "Q3_Cared_For_Someone" ~ "Care Experience",
+        Question == "Q7_Real_Life_Examples" ~ "Want Examples",
+        Question == "Q8_Checklist_Helpful" ~ "Want Checklist",
+        Question == "Q9_Language_Type" ~ "Language Style",
+        Question == "Q11_Pictures_Help" ~ "Want Pictures",
+        Question == "Q15_Review_Group_Interest" ~ "Review Interest"
+      ),
+      Color_Scale = case_when(
+        Missing_Percent <= 5 ~ "#27AE60",   # Green - good
+        Missing_Percent <= 15 ~ "#F39C12",  # Orange - caution
+        TRUE ~ "#E74C3C"                    # Red - concerning
+      )
+    )
+  
+  p <- plot_ly(missing_data,
+               x = ~Question_Label, y = ~Missing_Percent,
+               type = 'bar',
+               text = ~paste0(Missing_Percent, "%"),
+               textposition = 'outside',
+               marker = list(color = ~Color_Scale)) %>%
+    layout(
+      xaxis = list(title = "Survey Question"),
+      yaxis = list(title = "Missing Data %"),
+      margin = list(l = 50, r = 20, t = 20, b = 120)
+    ) %>%
+    config(displayModeBar = FALSE)
+  
+  p
+} else {
+  plotly_empty() %>%
+    layout(title = "No missing data analysis available")
+}
+```
+
+# Data Export & Codebook
+
+## Column {width=100%}
+
+### Codebook for Statistical Analysis
+
+```{r}
+#| label: codebook
+#| title: "Variable Codebook"
+
+if (!is.null(processed$processed_data) && nrow(processed$processed_data) > 0) {
+  # Create comprehensive codebook
+  codebook <- tibble(
+    Variable = names(processed$processed_data),
+    Description = case_when(
+      Variable == "ResponseId" ~ "Unique response identifier from Qualtrics",
+      Variable == "IPAddress" ~ "IP address of respondent",
+      Variable == "Progress" ~ "Percentage of survey completed (0-100)",
+      Variable == "Duration" ~ "Time spent on survey in seconds",
+      Variable == "Finished" ~ "Whether survey was completed (TRUE/FALSE)",
+      Variable == "RecordedDate" ~ "Date and time of response",
+      Variable == "ResponseType" ~ "Type of response (Survey Preview/IP Address)",
+      Variable == "LocationLatitude" ~ "Approximate latitude of respondent",
+      Variable == "LocationLongitude" ~ "Approximate longitude of respondent",
+      
+      # Survey content
+      Variable == "Q1_Main_Role" ~ "Primary role/relationship to catatonia-ID topic",
+      Variable == "Q1_Other_Role" ~ "Specification when 'Other' selected for main role",
+      Variable == "Q2_Heard_Of_Catatonia" ~ "Prior knowledge of catatonia in intellectual disability",
+      Variable == "Q3_Cared_For_Someone" ~ "Experience caring for someone with catatonia",
+      Variable == "Q4_What_Include_Text" ~ "Open text: What should be included in handout",
+      
+      # Content preferences (binary)
+      str_starts(Variable, "Q5_Include_") ~ paste("Binary: Include", str_remove(Variable, "Q5_Include_"), "in handout"),
+      
+      Variable == "Q6_Anything_Else_Text" ~ "Open text: Additional content suggestions",
+      Variable == "Q7_Real_Life_Examples" ~ "Preference for real-life examples in handout",
+      Variable == "Q8_Checklist_Helpful" ~ "Preference for symptom tracking checklist",
+      Variable == "Q9_Language_Type" ~ "Preferred language/complexity level for handout",
+      
+      # Format preferences (binary)
+      str_starts(Variable, "Q10_Format_") ~ paste("Binary: Prefer", str_remove(Variable, "Q10_Format_"), "format"),
+      
+      Variable == "Q11_Pictures_Help" ~ "Preference for pictures/visual aids",
+      Variable == "Q12_Wish_Knew_Earlier" ~ "Open text: What wish knew earlier about catatonia-ID",
+      Variable == "Q13_Biggest_Worry" ~ "Open text: Biggest worry about catatonia",
+      Variable == "Q14_Anything_Else" ~ "Open text: Other suggestions for handout",
+      Variable == "Q15_Review_Group_Interest" ~ "Interest in participating in review group",
+      Variable == "Q16_Email" ~ "Email address for review group (if interested)",
+      
+      TRUE ~ "Variable description not available"
+    ),
+    Type = case_when(
+      Variable %in% c("ResponseId", "IPAddress", "ResponseType") ~ "Identifier",
+      Variable %in% c("Progress", "Duration", "LocationLatitude", "LocationLongitude") ~ "Numeric",
+      Variable == "Finished" ~ "Logical",
+      Variable == "RecordedDate" ~ "DateTime",
+      str_starts(Variable, "Q5_Include_") | str_starts(Variable, "Q10_Format_") ~ "Binary (0/1)",
+      Variable %in% c("Q1_Main_Role", "Q2_Heard_Of_Catatonia", "Q3_Cared_For_Someone", 
+                     "Q7_Real_Life_Examples", "Q8_Checklist_Helpful", "Q9_Language_Type",
+                     "Q11_Pictures_Help", "Q15_Review_Group_Interest") ~ "Categorical",
+      str_detect(Variable, "_Text|_Email|Q1_Other") ~ "Open Text",
+      TRUE ~ "Other"
+    ),
+    Values = case_when(
+      Variable == "Finished" ~ "TRUE = Completed, FALSE = Incomplete",
+      Variable == "Q2_Heard_Of_Catatonia" ~ "Yes, No",
+      Variable == "Q3_Cared_For_Someone" ~ "Yes, No, Unsure", 
+      Variable == "Q7_Real_Life_Examples" ~ "Yes, No",
+      Variable == "Q8_Checklist_Helpful" ~ "Yes, No",
+      Variable == "Q9_Language_Type" ~ "Medical and detailed / Easy to understand / Both options",
+      Variable == "Q11_Pictures_Help" ~ "Yes, No",
+      Variable == "Q15_Review_Group_Interest" ~ "Yes, No",
+      Variable == "Q1_Main_Role" ~ "Parent or caregiver / Person with intellectual disability / Medical provider / Behavioral therapist / Teacher or school staff / Other",
+      str_starts(Variable, "Q5_Include_") | str_starts(Variable, "Q10_Format_") ~ "1 = Selected, 0 = Not selected",
+      Variable %in% c("Progress") ~ "0-100 (percentage)",
+      Variable == "Duration" ~ "Seconds (numeric)",
+      str_detect(Variable, "_Text|_Email") ~ "Free text response",
+      TRUE ~ "See data for possible values"
+    )
+  ) %>%
+    arrange(Variable)
+  
+  # Display as interactive table
+  reactable(
+    codebook,
+    columns = list(
+      Variable = colDef(name = "Variable Name", width = 200, style = "font-family: monospace;"),
+      Description = colDef(name = "Description", width = 300),
+      Type = colDef(name = "Data Type", width = 120, align = "center"),
+      Values = colDef(name = "Possible Values", width = 250)
+    ),
+    searchable = TRUE,
+    striped = TRUE,
+    highlight = TRUE,
+    borderless = TRUE,
+    pagination = TRUE,
+    defaultPageSize = 15,
+    showPageSizeOptions = TRUE,
+    pageSizeOptions = c(10, 15, 25, 50),
+    theme = reactableTheme(
+      headerStyle = list(backgroundColor = "#f8f9fa", fontWeight = "bold")
+    )
+  )
+} else {
+  div(
+    h4("No Data Available"),
+    p("Please upload survey data to generate codebook.")
+  )
+}
+```
+
+### Data Export Options
+
+```{r}
+#| label: export-options
+#| title: "Download Processed Data"
+
+if (!is.null(processed$processed_data) && nrow(processed$processed_data) > 0) {
+  div(
+    style = "padding: 20px; background-color: #f8f9fa; border-radius: 8px; margin: 10px 0;",
+    
+    h4("Data Export Options"),
+    
+    p("The following files are available for download:"),
+    
+    tags$ul(
+      tags$li(strong("Complete Dataset: "), "All survey responses with original Qualtrics formatting"),
+      tags$li(strong("Cleaned Dataset: "), "Processed data with cleaned variables and derived fields"),
+      tags$li(strong("Summary Report: "), "Key findings and metrics in Excel format"),
+      tags$li(strong("Codebook: "), "Variable definitions and coding schemes")
+    ),
+    
+    br(),
+    
+    div(
+      style = "display: flex; gap: 10px; flex-wrap: wrap;",
+      
+      downloadButton("download_raw", "Download Raw Data (.csv)", 
+                    class = "btn btn-primary", style = "margin: 5px;"),
+      downloadButton("download_clean", "Download Cleaned Data (.csv)", 
+                    class = "btn btn-success", style = "margin: 5px;"),
+      downloadButton("download_summary", "Download Summary (.xlsx)", 
+                    class = "btn btn-info", style = "margin: 5px;"),
+      downloadButton("download_codebook", "Download Codebook (.csv)", 
+                    class = "btn btn-warning", style = "margin: 5px;")
+    ),
+    
+    br(),
+    
+    div(
+      style = "font-size: 0.9em; color: #666; margin-top: 15px;",
+      strong("Data Updated: "), format(Sys.time(), "%Y-%m-%d %H:%M:%S"), br(),
+      strong("Total Responses: "), nrow(processed$processed_data), br(),
+      strong("Completion Rate: "), paste0(round(mean(processed$processed_data$Finished, na.rm = TRUE) * 100, 1), "%")
+    )
+  )
+} else {
+  div(
+    style = "padding: 20px; text-align: center; color: #999;",
+    h4("No Data Available"),
+    p("Upload survey data from Qualtrics to enable export options.")
+  )
+}
+```
+
+```{css}
+.metric-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 15px;
+  padding: 10px;
+}
+
+.metric-box {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 20px;
+  border-radius: 10px;
+  text-align: center;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.metric-number {
+  font-size: 2.5em;
+  font-weight: bold;
+  margin: 0;
+  text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+}
+
+.metric-label {
+  font-size: 0.9em;
+  margin: 5px 0 0 0;
+  opacity: 0.9;
+}
+``` Response Summary
+
+```{r}
+#| label: summary-stats
+#| title: "Key Metrics"
+
+if (!is.null(processed$summary_stats)) {
+  stats <- processed$summary_stats
+  
+  div(
+    class = "metric-container",
+    
+    div(class = "metric-box",
+      h3(class = "metric-number", stats$total_responses),
+      p(class = "metric-label", "Total Responses")
+    ),
+    
+    div(class = "metric-box",
+      h3(class = "metric-number", paste0(stats$completion_rate, "%")),
+      p(class = "metric-label", "Completion Rate")
+    ),
+    
+    div(class = "metric-box",
+      h3(class = "metric-number", stats$completed),
+      p(class = "metric-label", "Completed Surveys")
+    ),
+    
+    div(class = "metric-box",
+      h3(class = "metric-number", paste0(stats$avg_completion_time, " min")),
+      p(class = "metric-label", "Avg. Time")
+    ),
+    
+    div(class = "metric-box",
+      h3(class = "metric-number", stats$responses_today),
+      p(class = "metric-label", "Responses Today")
+    ),
+    
+    div(class = "metric-box",
+      h3(class = "metric-number", stats$responses_last_7_days),
+      p(class = "metric-label", "Last 7 Days")
+    )
+  )
+} else {
+  div(
+    h4("No Data Available"),
+    p("Please upload survey data to view metrics.")
+  )
+}
+```
+
+### Progress Tracking
+
+```{r}
+#| label: progress-chart
+#| title: "Completion Progress Over Time"
+
+if (!is.null(processed$completion_by_day)) {
+  completion_data <- processed$completion_by_day %>%
+    mutate(
+      cumulative_total = cumsum(total),
+      cumulative_completed = cumsum(completed),
+      completion_rate_daily = round(completed / total * 100, 1)
+    )
+  
+  p <- plot_ly(completion_data) %>%
+    add_trace(x = ~RecordedDate, y = ~cumulative_total, 
+              type = 'scatter', mode = 'lines+markers',
+              name = 'Total Responses', line = list(color = '#2E86C1')) %>%
+    add_trace(x = ~RecordedDate, y = ~cumulative_completed,
+              type = 'scatter', mode = 'lines+markers', 
+              name = 'Completed', line = list(color = '#28B463')) %>%
+    layout(
+      xaxis = list(title = "Date"),
+      yaxis = list(title = "Cumulative Responses"),
+      hovermode = 'x unified',
+      margin = list(l = 50, r = 20, t = 20, b = 50)
+    )
+  
+  p
+} else {
+  plotly_empty() %>%
+    layout(title = "No data available")
+}
+```
+
+## Column {width=75%}
+
+### Response Demographics
+
+```{r}
+#| label: demographics
+#| title: "Participant Roles"
+
+if (!is.null(processed$processed_data) && nrow(processed$processed_data) > 0) {
+  role_data <- processed$processed_data %>%
+    filter(!is.na(Role_Clean)) %>%
+    count(Role_Clean, sort = TRUE) %>%
+    mutate(
+      percentage = round(n / sum(n) * 100, 1),
+      label = paste0(Role_Clean, " (", n, ", ", percentage, "%)")
+    )
+  
+  p <- plot_ly(role_data, 
+               x = ~reorder(Role_Clean, n), y = ~n,
+               type = 'bar',
+               text = ~paste0(n, " (", percentage, "%)"),
+               textposition = 'outside',
+               marker = list(color = '#3498DB')) %>%
+    layout(
+      xaxis = list(title = "Participant Role"),
+      yaxis = list(title = "Number of Responses"),
+      margin = list(l = 100, r = 20, t = 20, b = 100)
+    ) %>%
+    config(displayModeBar = FALSE)
+  
+  p
+} else {
+  plotly_empty() %>%
+    layout(title = "No demographic data available")
+}
+```
+
+### Daily Response Pattern
+
+```{r}
+#| label: daily-pattern  
+#| title: "Daily Response and Completion Rates"
+
+if (!is.null(processed$completion_by_day)) {
+  daily_data <- processed$completion_by_day %>%
+    mutate(completion_rate = round(completed / total * 100, 1)) %>%
+    arrange(RecordedDate)
+  
+  p <- plot_ly(daily_data) %>%
+    add_trace(x = ~RecordedDate, y = ~total,
+              type = 'bar', name = 'Total Responses',
+              marker = list(color = '#85C1E9')) %>%
+    add_trace(x = ~RecordedDate, y = ~completed,
+              type = 'bar', name = 'Completed',
+              marker = list(color = '#58D68D')) %>%
+    add_trace(x = ~RecordedDate, y = ~completion_rate,
+              type = 'scatter', mode = 'lines+markers',
+              name = 'Completion Rate (%)', yaxis = 'y2',
+              line = list(color = '#E74C3C', width = 3),
+              marker = list(size = 8)) %>%
+    layout(
+      xaxis = list(title = "Date"),
+      yaxis = list(title = "Number of Responses", side = 'left'),
+      yaxis2 = list(title = "Completion Rate (%)", side = 'right', overlaying = 'y'),
+      barmode = 'group',
+      hovermode = 'x unified',
+      margin = list(l = 50, r = 50, t = 20, b = 50)
+    )
+  
+  p
+} else {
+  plotly_empty() %>%
+    layout(title = "No daily pattern data available")
+}
+```
+
+# Response Analysis
+
+## Column {width=50%}
+
+### Experience with Catatonia
+
+```{r}
+#| label: catatonia-experience
+#| title: "Prior Knowledge and Experience"
+
+if (!is.null(processed$processed_data) && nrow(processed$processed_data) > 0) {
+  # Prior knowledge
+  heard_of <- processed$processed_data %>%
+    filter(!is.na(Q2_Heard_Of_Catatonia)) %>%
+    count(Q2_Heard_Of_Catatonia) %>%
+    mutate(percentage = round(n / sum(n) * 100, 1))
+  
+  # Care experience  
+  cared_for <- processed$processed_data %>%
+    filter(!is.na(Q3_Cared_For_Someone)) %>%
+    count(Q3_Cared_For_Someone) %>%
+    mutate(percentage = round(n / sum(n) * 100, 1))
+  
+  # Create side-by-side pie charts
+  fig1 <- plot_ly(heard_of, labels = ~Q2_Heard_Of_Catatonia, values = ~n, 
+                  type = 'pie', domain = list(x = c(0, 0.48), y = c(0.5, 1)),
+                  name = "Heard of Catatonia-ID",
+                  textinfo = 'label+percent',
+                  textposition = 'inside') %>%
+    layout(annotations = list(text = "Heard of Catatonia-ID", 
+                             x = 0.24, y = 1.1, showarrow = FALSE))
+  
+  fig2 <- plot_ly(cared_for, labels = ~Q3_Cared_For_Someone, values = ~n,
+                  type = 'pie', domain = list(x = c(0.52, 1), y = c(0.5, 1)),
+                  name = "Care Experience",
+                  textinfo = 'label+percent',
+                  textposition = 'inside') %>%
+    layout(annotations = list(text = "Care Experience",
+                             x = 0.76, y = 1.1, showarrow = FALSE))
+  
+  subplot(fig1, fig2) %>%
+    layout(
+      showlegend = TRUE,
+      margin = list(l = 20, r = 20, t = 50, b = 20)
+    )
+    
+} else {
+  plotly_empty() %>%
+    layout(title = "No experience data available")
+}
+```
+
+### Content Preferences
+
+```{r}
+#| label: content-preferences
+#| title: "Most Requested Handout Content"
+
+if (!is.null(processed$processed_data) && nrow(processed$processed_data) > 0) {
+  # Aggregate checkbox responses for content preferences
+  content_cols <- paste0("Q5_Include_", c("What_Is", "Signs", "Warning_Signs", 
+                                         "Differences_ID", "Tell_Difference", 
+                                         "What_To_Do", "Treatments", "Urgency", 
+                                         "Where_Help", "Advocate", "Family_Help"))
+  
+  content_labels <- c("What catatonia is", "Signs & symptoms", "Warning signs",
+                     "Differences in ID", "Tell difference", "What to do first",
+                     "Treatments", "Urgency level", "Where to get help", 
+                     "How to advocate", "Family support")
+  
+  content_data <- tibble(
+    Content = content_labels,
+    Selected = NA_real_
+  )
+  
+  for (i in seq_along(content_cols)) {
+    if (content_cols[i] %in% names(processed$processed_data)) {
+      content_data$Selected[i] <- sum(processed$processed_data[[content_cols[i]]], na.rm = TRUE)
+    }
+  }
+  
+  content_data <- content_data %>%
+    filter(!is.na(Selected)) %>%
+    arrange(desc(Selected)) %>%
+    mutate(
+      percentage = round(Selected / nrow(processed$processed_data) * 100, 1),
+      Content = factor(Content, levels = Content)
+    )
+  
+  p <- plot_ly(content_data,
+               y = ~Content, x = ~Selected,
+               type = 'bar', orientation = 'h',
+               text = ~paste0(Selected, " (", percentage, "%)"),
+               textposition = 'outside',
+               marker = list(color = '#9B59B6')) %>%
+    layout(
+      xaxis = list(title = "Number of Responses"),
+      yaxis = list(title = ""),
+      margin = list(l = 150, r = 50, t = 20, b = 50)
+    ) %>%
+    config(displayModeBar = FALSE)
+  
+  p
+} else {
+  plotly_empty() %>%
+    layout(title = "No content preference data available")
+}
+```
+
+## Column {width=50%}
+
+### Format Preferences
+
+```{r}
+#| label: format-preferences
+#| title: "Preferred Handout Formats"
+
+if (!is.null(processed$processed_data) && nrow(processed$processed_data) > 0) {
+  # Format preferences
+  format_cols <- paste0("Q10_Format_", c("Print", "PDF", "Webpage", "Checklist", "Video"))
+  format_labels <- c("Printed handout", "PDF download", "Web page", "Checklist", "Video")
+  
+  format_data <- tibble(
+    Format = format_labels,
+    Selected = NA_real_
+  )
+  
+  for (i in seq_along(format_cols)) {
+    if (format_cols[i] %in% names(processed$processed_data)) {
+      format_data$Selected[i] <- sum(processed$processed_data[[format_cols[i]]], na.rm = TRUE)
+    }
+  }
+  
+  format_data <- format_data %>%
+    filter(!is.na(Selected)) %>%
+    arrange(Selected) %>%
+    mutate(
+      percentage = round(Selected / nrow(processed$processed_data) * 100, 1),
+      Format = factor(Format, levels = Format)
+    )
+  
+  p <- plot_ly(format_data,
+               x = ~Format, y = ~Selected,
+               type = 'bar',
+               text = ~paste0(Selected, " (", percentage, "%)"),
+               textposition = 'outside',
+               marker = list(color = '#E67E22')) %>%
+    layout(
+      xaxis = list(title = "Format Type"),
+      yaxis = list(title = "Number of Responses"),
+      margin = list(l = 50, r = 20, t = 20, b = 100)
+    ) %>%
+    config(displayModeBar = FALSE)
+  
+  p
+} else {
+  plotly_empty() %>%
+    layout(title = "No format preference data available")
+}
+```
+
+###
