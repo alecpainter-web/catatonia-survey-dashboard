@@ -27,7 +27,7 @@ library(shinydashboard)
 
 # Load data
 # In production, this would read from the actual Qualtrics CSV
-data_file <- "mock_catatonia_id_survey_data.csv"
+data_file <- "raw_qualtrics_2025-09-10.csv"
 
 if (file.exists(data_file)) {
   survey_data <- read_csv(data_file, show_col_types = FALSE)
