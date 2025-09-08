@@ -1,8 +1,8 @@
-name: Deploy Dashboard
+name: Quarto Publish
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -12,43 +12,54 @@ permissions:
 
 concurrency:
   group: "pages"
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    
-    - name: Setup Quarto
-      uses: quarto-dev/quarto-actions/setup@v2
-    
-    - name: Setup R
-      uses: r-lib/actions/setup-r@v2
-      with:
-        r-version: '4.3.0'
-    
-    - name: Install R packages
-      run: |
-        install.packages(c("tidyverse", "plotly", "DT", "reactable", "lubridate", "htmltools", "knitr", "scales"), repos='https://cran.rstudio.com/')
-      shell: Rscript {0}
-    
-    - name: Render dashboard
-      run: quarto render dashboard.qmd
-    
-    - name: Upload Pages artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: .
+      - uses: actions/checkout@v4
+
+      # Set up R (the renderer needs your R pkgs)
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.3.3'
+
+      # Install R dependencies used by your .qmd (add others as needed)
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: |
+            any::plotly
+            any::dplyr
+            any::readr
+            any::tidyr
+            any::lubridate
+            any::janitor
+
+      # Set up Quarto
+      - uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: '1.5.56'
+
+      # Render the site
+      - name: Render site
+        uses: quarto-dev/quarto-actions/render@v2
+        with:
+          path: .
+
+      # Upload the rendered site (default Quarto output dir is _site)
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
 
   deploy:
+    needs: build
+    runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
     steps:
-    - name: Deploy to GitHub Pages
-      id: deployment
-      uses: actions/deploy-pages@v4
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
