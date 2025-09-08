@@ -1,0 +1,26 @@
+# PRIVACY: Never commit raw survey data or PII
+raw_*.csv
+*qualtrics*.csv
+original_data/
+local_data/
+backup/
+
+# Generated files (don't commit these)
+dashboard_files/
+_site/
+/.quarto/
+
+# R and RStudio files
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Only commit anonymized data
+!anonymized_survey_data.csv
+!mock_catatonia_id_survey_data.csv
